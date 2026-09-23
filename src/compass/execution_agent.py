@@ -21,11 +21,22 @@ from compass.models import OrderResult
 
 load_dotenv()
 
+# Order size guardrails (SCRUM-17). Enforced here, not in AlpacaBroker,
+# since these are Compass policy, not an Alpaca API constraint.
+MAX_ORDER_QTY = 100
+MAX_ORDER_NOTIONAL = 10_000.0
+
 
 @dataclass
 class ExecutionDeps:
     broker: AlpacaBroker
 
+
+class OrderTooLargeError(Exception):
+    """Raised when a requested order exceeds MAX_ORDER_QTY or
+    MAX_ORDER_NOTIONAL. Caught in each placing tool and turned into a
+    ModelRetry so the agent explains the limit instead of the run
+    crashing."""
 
 
 _model = OpenAIChatModel(
@@ -58,6 +69,30 @@ def _to_result(order, account_mode: str = "paper") -> OrderResult:
         notional=order.notional,
         account_mode=account_mode,
     )
+
+
+def _check_order_size(
+    broker: AlpacaBroker, symbol: str, qty: float | None, notional: float | None
+) -> None:
+    """Reject orders over MAX_ORDER_QTY shares or MAX_ORDER_NOTIONAL
+    dollars. For qty orders, looks up the last price to compute an
+    equivalent notional, so a small share count in an expensive stock
+    can't bypass the dollar limit."""
+    if notional is not None and notional > MAX_ORDER_NOTIONAL:
+        raise OrderTooLargeError(
+            f"${notional:,.2f} exceeds the ${MAX_ORDER_NOTIONAL:,.2f} order limit."
+        )
+    if qty is not None:
+        if qty > MAX_ORDER_QTY:
+            raise OrderTooLargeError(
+                f"{qty} shares exceeds the {MAX_ORDER_QTY}-share order limit."
+            )
+        implied_notional = qty * broker.get_last_price(symbol)
+        if implied_notional > MAX_ORDER_NOTIONAL:
+            raise OrderTooLargeError(
+                f"{qty} shares of {symbol} is ~${implied_notional:,.2f}, "
+                f"which exceeds the ${MAX_ORDER_NOTIONAL:,.2f} order limit."
+            )
 
 
 @execution_agent.tool
