@@ -1,0 +1,174 @@
+"""Trade execution subagent: places and manages orders on the user's
+Alpaca paper account.
+
+Tools here are thin translators — typed args in, AlpacaBroker call,
+typed result out. All Alpaca-specific logic lives in broker.py.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from alpaca.trading.enums import OrderSide
+from dotenv import load_dotenv
+from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+from compass.broker import AlpacaBroker
+from compass.models import OrderResult
+
+load_dotenv()
+
+
+@dataclass
+class ExecutionDeps:
+    broker: AlpacaBroker
+
+
+
+_model = OpenAIChatModel(
+    "openai/gpt-oss-120b",
+    provider=OpenAIProvider(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=os.environ["GROQ_API_KEY"],
+    ),
+)
+
+execution_agent = Agent(
+    _model,
+    deps_type=ExecutionDeps,
+    output_type=OrderResult | str,
+    system_prompt=(
+        "You execute trades on the user's Alpaca paper trading account. "
+        "You only act on explicit instructions, you never recommend what "
+        "to buy, sell, or hold. When you take an action, state clearly that "
+        "it affected the paper account, not a live one."
+    ),
+)
+
+
+def _to_result(order, account_mode: str = "paper") -> OrderResult:
+    return OrderResult(
+        order_id=str(order.id),
+        status=order.status.value,
+        symbol=order.symbol,
+        qty=order.qty,
+        notional=order.notional,
+        account_mode=account_mode,
+    )
+
+
+@execution_agent.tool
+def place_market_order(
+    ctx: RunContext[ExecutionDeps],
+    symbol: str,
+    side: str,
+    qty: float | None = None,
+    notional: float | None = None,
+) -> OrderResult:
+    """Buy or sell at the current market price. Use qty for a share count,
+    or notional for a dollar amount (market orders only)."""
+    order = ctx.deps.broker.place_market_order(
+        symbol, OrderSide(side), qty=qty, notional=notional
+    )
+    return _to_result(order)
+
+
+@execution_agent.tool
+def place_limit_order(
+    ctx: RunContext[ExecutionDeps],
+    symbol: str,
+    side: str,
+    qty: float,
+    limit_price: float,
+) -> OrderResult:
+    """Buy or sell a fixed share quantity, only at limit_price or better."""
+    order = ctx.deps.broker.place_limit_order(symbol, OrderSide(side), qty, limit_price)
+    return _to_result(order)
+
+
+@execution_agent.tool
+def place_bracket_order(
+    ctx: RunContext[ExecutionDeps],
+    symbol: str,
+    side: str,
+    qty: float,
+    take_profit_price: float,
+    stop_loss_price: float,
+) -> OrderResult:
+    """Market entry with an attached take-profit and stop-loss. Whichever
+    exit condition triggers first fills and cancels the other."""
+    order = ctx.deps.broker.place_bracket_order(
+        symbol, OrderSide(side), qty, take_profit_price, stop_loss_price
+    )
+    return _to_result(order)
+
+
+@execution_agent.tool
+def get_order_status(ctx: RunContext[ExecutionDeps], order_id: str) -> OrderResult:
+    """Look up an order's current lifecycle status."""
+    return _to_result(ctx.deps.broker.get_order(order_id))
+
+
+@execution_agent.tool
+def get_last_price(ctx: RunContext[ExecutionDeps], symbol: str) -> float:
+    """Get a symbol's last traded price. Use this for context before
+    placing limit or bracket orders — not a live quote, may lag slightly."""
+    return ctx.deps.broker.get_last_price(symbol)
+
+
+@execution_agent.tool
+def cancel_order(ctx: RunContext[ExecutionDeps], order_id: str) -> str:
+    """Cancel an order. Only works before the order reaches a terminal
+    state (filled, canceled, or expired)."""
+    ctx.deps.broker.cancel_order(order_id)
+    return f"Order {order_id} canceled."
+
+
+@execution_agent.tool
+def replace_order(
+    ctx: RunContext[ExecutionDeps],
+    order_id: str,
+    qty: float | None = None,
+    limit_price: float | None = None,
+    stop_price: float | None = None,
+) -> OrderResult:
+    """Change qty/limit_price/stop_price on an open order. Not supported
+    for notional orders or OTO legs — those can only be canceled."""
+    try:
+        order = ctx.deps.broker.replace_order(
+            order_id, qty=qty, limit_price=limit_price, stop_price=stop_price
+        )
+    except Exception as e:
+        raise ModelRetry(
+            f"Couldn't replace order {order_id}: {e}. Notional orders and "
+            "OTO legs can't be replaced, only canceled and re-placed."
+        )
+    return _to_result(order)
+
+
+@execution_agent.tool
+def get_trade_history(
+    ctx: RunContext[ExecutionDeps],
+    after: str | None = None,
+    until: str | None = None,
+) -> list[dict]:
+    """Fetch fill-level trade activity (the audit trail) for a date range."""
+    return ctx.deps.broker.get_trade_activities(after=after, until=until)
+
+
+if __name__ == "__main__":
+    # Interactive CLI for manually chatting with the agent.
+    # Run with: uv run python -m compass.execution_agent
+    from compass.tracing import enable_tracing, traced_run
+
+    enable_tracing()
+
+    deps = ExecutionDeps(broker=AlpacaBroker.from_env())
+    # One trace for the whole CLI session (every turn until exit), not
+    # per-turn — to_cli_sync runs its own internal loop we can't hook
+    # into per-message.
+    with traced_run("execution_agent_cli_session"):
+        execution_agent.to_cli_sync(deps=deps, prog_name="compass-execution")
