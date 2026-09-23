@@ -184,6 +184,8 @@ def replace_order(
 ) -> OrderResult:
     """Change qty/limit_price/stop_price on an open order. Not supported
     for notional orders or OTO legs — those can only be canceled."""
+    if qty is not None and qty > MAX_ORDER_QTY:
+        raise ModelRetry(f"{qty} shares exceeds the {MAX_ORDER_QTY}-share order limit.")
     try:
         order = ctx.deps.broker.replace_order(
             order_id, qty=qty, limit_price=limit_price, stop_price=stop_price
