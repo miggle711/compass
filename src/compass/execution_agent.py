@@ -105,6 +105,10 @@ def place_market_order(
 ) -> OrderResult:
     """Buy or sell at the current market price. Use qty for a share count,
     or notional for a dollar amount (market orders only)."""
+    try:
+        _check_order_size(ctx.deps.broker, symbol, qty, notional)
+    except OrderTooLargeError as e:
+        raise ModelRetry(str(e))
     order = ctx.deps.broker.place_market_order(
         symbol, OrderSide(side), qty=qty, notional=notional
     )
@@ -120,6 +124,10 @@ def place_limit_order(
     limit_price: float,
 ) -> OrderResult:
     """Buy or sell a fixed share quantity, only at limit_price or better."""
+    try:
+        _check_order_size(ctx.deps.broker, symbol, qty, None)
+    except OrderTooLargeError as e:
+        raise ModelRetry(str(e))
     order = ctx.deps.broker.place_limit_order(symbol, OrderSide(side), qty, limit_price)
     return _to_result(order)
 
@@ -135,6 +143,10 @@ def place_bracket_order(
 ) -> OrderResult:
     """Market entry with an attached take-profit and stop-loss. Whichever
     exit condition triggers first fills and cancels the other."""
+    try:
+        _check_order_size(ctx.deps.broker, symbol, qty, None)
+    except OrderTooLargeError as e:
+        raise ModelRetry(str(e))
     order = ctx.deps.broker.place_bracket_order(
         symbol, OrderSide(side), qty, take_profit_price, stop_loss_price
     )
