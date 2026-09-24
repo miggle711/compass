@@ -211,9 +211,13 @@ def get_trade_history(
     ctx: RunContext[ExecutionDeps],
     after: str | None = None,
     until: str | None = None,
+    limit: int = 10,
 ) -> list[dict]:
-    """Fetch fill-level trade activity (the audit trail) for a date range."""
-    return ctx.deps.broker.get_trade_activities(after=after, until=until)
+    """Fetch fill-level trade activity (the audit trail), most recent
+    first. Defaults to the last 10 fills — increase limit if the user
+    asks for more, but keep it modest, large results can exceed what
+    the model can process in one response."""
+    return ctx.deps.broker.get_trade_activities(after=after, until=until, page_size=limit)
 
 
 if __name__ == "__main__":
