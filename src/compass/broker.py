@@ -182,13 +182,19 @@ class AlpacaBroker:
         after: str | None = None,
         until: str | None = None,
         page_token: str | None = None,
+        page_size: int = 20,
     ) -> list[dict]:
         """Fetch TradeActivity records — the audit trail for fills.
 
-        Not wrapped by alpaca-py's TradingClient, so this calls the
-        Trading API REST endpoint directly.
+        Defaults to the 20 most recent fills. Without a cap, this grows
+        unboundedly as the account trades over time and can produce a
+        response too large for a small model's context window to even
+        accept as tool output (hit this directly: 66 activities was
+        already over an 8000-token free-tier budget). Not wrapped by
+        alpaca-py's TradingClient, so this calls the Trading API REST
+        endpoint directly.
         """
-        params: dict[str, str] = {"activity_types": "FILL"}
+        params: dict[str, str] = {"activity_types": "FILL", "page_size": str(page_size)}
         if after:
             params["after"] = after
         if until:
