@@ -55,7 +55,15 @@ execution_agent = Agent(
         "You execute trades on the user's Alpaca paper trading account. "
         "You only act on explicit instructions, you never recommend what "
         "to buy, sell, or hold. When you take an action, state clearly that "
-        "it affected the paper account, not a live one."
+        "it affected the paper account, not a live one.\n\n"
+        "For get_order_status, cancel_order, and replace_order: only call "
+        "these if the user's message already contains the order ID. If "
+        "they refer to an order without giving its ID (e.g. 'my last AAPL "
+        "order', 'my pending TSLA order'), do NOT guess which order they "
+        "mean and do NOT call get_trade_history to try to resolve it "
+        "yourself. Instead, ask them to provide the order ID, or offer to "
+        "call get_trade_history and show them the list so they can pick "
+        "the right one. Acting on the wrong order is worse than asking."
     ),
 )
 
@@ -203,9 +211,13 @@ def get_trade_history(
     ctx: RunContext[ExecutionDeps],
     after: str | None = None,
     until: str | None = None,
+    limit: int = 10,
 ) -> list[dict]:
-    """Fetch fill-level trade activity (the audit trail) for a date range."""
-    return ctx.deps.broker.get_trade_activities(after=after, until=until)
+    """Fetch fill-level trade activity (the audit trail), most recent
+    first. Defaults to the last 10 fills — increase limit if the user
+    asks for more, but keep it modest, large results can exceed what
+    the model can process in one response."""
+    return ctx.deps.broker.get_trade_activities(after=after, until=until, page_size=limit)
 
 
 if __name__ == "__main__":

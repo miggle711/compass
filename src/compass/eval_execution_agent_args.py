@@ -62,6 +62,20 @@ STATIC_CASES: list[tuple[str, str, dict]] = [
         "place_market_order",
         {"symbol": "TSLA", "side": "buy", "notional": 500},
     ),
+    (
+        "Show me everything I've traded this week.",
+        "get_trade_history",
+        {},
+    ),
+    (
+        # No hardcoded prices, same reason as the original bracket case
+        # in eval_execution_agent.py: any fixed take-profit/stop-loss
+        # eventually drifts to the wrong side of a live market price
+        # and gets rejected by Alpaca. Checked on symbol/side/qty only.
+        "Buy 1 share of MSFT with a take-profit above and a stop-loss below the current price.",
+        "place_bracket_order",
+        {"symbol": "MSFT", "side": "buy", "qty": 1},
+    ),
 ]
 
 # Order-dependent cases: (case_kind, expected tool). The query text and
@@ -70,6 +84,7 @@ STATIC_CASES: list[tuple[str, str, dict]] = [
 ORDER_DEPENDENT_CASES: list[tuple[str, str]] = [
     ("cancel_order", "cancel_order"),
     ("get_order_status", "get_order_status"),
+    ("replace_order", "replace_order"),
 ]
 
 
@@ -105,9 +120,12 @@ def seed_dataset(langfuse) -> None:
         )
 
 
-def _setup_order_for_case(broker: AlpacaBroker, case_type: str) -> tuple[str, str]:
+def _setup_order_for_case(
+    broker: AlpacaBroker, case_type: str
+) -> tuple[str, str, dict]:
     """Place a real throwaway order for an order-dependent case, and
-    return (query text, real order id) built around it.
+    return (query text, real order id, expected extra args) built
+    around it.
 
     Uses a cheap, far-from-market limit order so it stays open (not
     filled) for the duration of the run — matters for the cancel case,
@@ -117,9 +135,15 @@ def _setup_order_for_case(broker: AlpacaBroker, case_type: str) -> tuple[str, st
     order_id = str(order.id)
 
     if case_type == "cancel_order":
-        return f"Cancel my order {order_id}.", order_id
+        return f"Cancel my order {order_id}.", order_id, {}
     if case_type == "get_order_status":
-        return f"What's the status of order {order_id}?", order_id
+        return f"What's the status of order {order_id}?", order_id, {}
+    if case_type == "replace_order":
+        return (
+            f"Change the limit price on order {order_id} to $2.00.",
+            order_id,
+            {"limit_price": 2.0},
+        )
     raise ValueError(f"Unknown order-dependent case type: {case_type}")
 
 
@@ -140,39 +164,46 @@ async def run_agent(*, item, **kwargs) -> dict:
     case_type = item.input["case_type"]
 
     expected_order_id = None
+    expected_extra_args: dict = {}
     if case_type == "static":
         query = item.input["query"]
     else:
-        query, expected_order_id = _setup_order_for_case(deps.broker, case_type)
+        query, expected_order_id, expected_extra_args = _setup_order_for_case(
+            deps.broker, case_type
+        )
 
+    output: dict = {
+        "tool": "none",
+        "args": {},
+        "expected_order_id": expected_order_id,
+        "expected_extra_args": expected_extra_args,
+    }
+    # For replace_order, a successful call returns a NEW order (Alpaca
+    # marks the original "replaced", it isn't mutated in place) — track
+    # that new id from the tool's return value so cleanup cancels the
+    # order that's actually still open, not the stale original id.
+    new_order_id: str | None = None
     try:
         with traced_run("eval_tool_args_run"):
             result = await execution_agent.run(query, deps=deps)
-        tool_calls = [
-            part
-            for msg in result.all_messages()
-            for part in getattr(msg, "parts", [])
-            if type(part).__name__ == "ToolCallPart"
-        ]
-        if not tool_calls:
-            return {"tool": "none", "args": {}, "expected_order_id": expected_order_id}
-        last_call = tool_calls[-1]
-        return {
-            "tool": last_call.tool_name,
-            "args": json.loads(last_call.args),
-            "expected_order_id": expected_order_id,
-        }
+        for msg in result.all_messages():
+            for part in getattr(msg, "parts", []):
+                part_kind = type(part).__name__
+                if part_kind == "ToolCallPart":
+                    output["tool"] = part.tool_name
+                    output["args"] = json.loads(part.args)
+                elif part_kind == "ToolReturnPart" and part.tool_name == "replace_order":
+                    content = part.content
+                    new_order_id = getattr(content, "order_id", None)
+        return output
     finally:
-        # Safety net: whatever the agent did (or didn't do), make sure
-        # the throwaway setup order doesn't stay open on the paper
-        # account. Already-terminal orders (e.g. the agent correctly
-        # canceled it) reject a second cancel — that's expected, not
-        # an eval failure, so it's swallowed here.
-        if expected_order_id is not None:
+        for order_id in {expected_order_id, new_order_id}:
+            if order_id is None:
+                continue
             try:
-                deps.broker.cancel_order(expected_order_id)
+                deps.broker.cancel_order(order_id)
             except Exception:
-                pass
+                pass  # already terminal (e.g. correctly replaced/canceled) — expected
 
 
 def tool_choice_correct(*, input, output, expected_output, **kwargs) -> Evaluation:
@@ -201,14 +232,10 @@ def args_correct(*, input, output, expected_output, **kwargs) -> Evaluation:
     if output.get("expected_order_id") is not None:
         actual_id = output["args"].get("order_id")
         expected_id = output["expected_order_id"]
-        if actual_id != expected_id:
-            return Evaluation(
-                name="args_correct", value=0.0,
-                comment=f"expected order_id {expected_id}, got {actual_id}",
-            )
-        return Evaluation(name="args_correct", value=1.0, comment="order_id matched")
+        expected_args = {"order_id": expected_id, **output.get("expected_extra_args", {})}
+    else:
+        expected_args = expected_output["args"]
 
-    expected_args = expected_output["args"]
     actual_args = output["args"]
     mismatches = {
         key: (expected_val, actual_args.get(key))
