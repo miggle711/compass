@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Import check
+        # Dummy values only, no real secrets needed — this just proves
+        # every module imports cleanly (catches syntax errors, missing
+        # deps, broken module-level code), it never calls a real API.
+        env:
+          GROQ_API_KEY: "ci-placeholder"
+          ALPACA_PAPER_KEY_ID: "ci-placeholder"
+          ALPACA_PAPER_SECRET_KEY: "ci-placeholder"
+          LANGFUSE_PUBLIC_KEY: "ci-placeholder"
+          LANGFUSE_SECRET_KEY: "ci-placeholder"
+          LANGFUSE_BASE_URL: "https://cloud.langfuse.com"
+          COMPASS_API_KEY: "ci-placeholder"
+        run: |
+          uv run python -c "
+          import compass.broker
+          import compass.models
+          import compass.execution_agent
+          import compass.tracing
+          import compass.eval_execution_agent
+          import compass.eval_execution_agent_args
+          import compass.api
+          print('all modules import cleanly')
+          "
