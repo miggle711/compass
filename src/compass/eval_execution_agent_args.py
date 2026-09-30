@@ -230,7 +230,6 @@ def args_correct(*, input, output, expected_output, **kwargs) -> Evaluation:
         return Evaluation(name="args_correct", value=0.0, comment="wrong tool, args not checked")
 
     if output.get("expected_order_id") is not None:
-        actual_id = output["args"].get("order_id")
         expected_id = output["expected_order_id"]
         expected_args = {"order_id": expected_id, **output.get("expected_extra_args", {})}
     else:

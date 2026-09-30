@@ -22,11 +22,6 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
 
 DATASET_NAME = "execution-agent-query-families"
 
-
-# include expected field as well, so we can validate the agent's tool choice against it
-# validate the inputs the tool receives, i.e. (buy 10 shares of AAPL at market price) and the outputs it returns, in a separate eval
-# and the outputs it returns as well
-
 CASES: list[tuple[str, str]] = [
     ("Buy 10 shares of AAPL at market price.", "place_market_order"),
     ("What's the status of my last AAPL order?", "get_order_status"),
@@ -35,7 +30,10 @@ CASES: list[tuple[str, str]] = [
     ("Show me everything I've traded this week.", "get_trade_history"),
     ("Place a limit order to sell 5 shares of GOOG at $180.", "place_limit_order"),
     ("Give me a log of every order I've placed, cancelled, or that got rejected.", "get_trade_history"),
-    ("Buy 1 share of GOOG with a take-profit above and a stop-loss below the current price.", "place_bracket_order"),
+    (
+        "Buy 1 share of GOOG with a take-profit above and a stop-loss below the current price.",
+        "place_bracket_order",
+    ),
     ("I want to spend $500 on TSLA, not a specific number of shares.", "place_market_order"),
 ]
 
