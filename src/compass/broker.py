@@ -15,6 +15,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.models import Order
 from alpaca.trading.requests import (
     GetOrdersRequest,
     LimitOrderRequest,
@@ -23,7 +24,6 @@ from alpaca.trading.requests import (
     StopLossRequest,
     TakeProfitRequest,
 )
-from alpaca.trading.models import Order
 
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 
