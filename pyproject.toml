@@ -17,3 +17,20 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/compass"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.9",
+]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+# E/F (pyflakes + pycodestyle errors) catch real bugs: unused imports,
+# undefined names, syntax issues. I sorts imports. Deliberately not
+# using ruff's full default set — rules like BLE001 (no bare except
+# Exception) and S110 (no silent pass) flag patterns used intentionally
+# elsewhere in this codebase (e.g. execution_agent.py's replace_order,
+# which catches whatever Alpaca raises and turns it into a ModelRetry).
+select = ["E", "F", "I"]
